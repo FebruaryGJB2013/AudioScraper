@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio search</title>
+  <style>
+    body { max-width: 760px; margin: 40px auto; padding: 0 16px;
+           font: 16px system-ui, sans-serif; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 10px; }
+    button { padding: 10px 14px; cursor: pointer; }
+    li { margin: 12px 0; }
+    .status { color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Find audio</h1>
+  <p>Search for audio you own or are authorized to download.</p>
+
+  <form id="searchForm">
+    <input id="query" placeholder="Song or artist name" required maxlength="200">
+    <button id="searchButton">Search</button>
+  </form>
+
+  <p id="status" class="status" aria-live="polite"></p>
+  <ol id="results"></ol>
+  <div id="downloadArea"></div>
+
+  <script>
+    const form = document.querySelector("#searchForm");
+    const queryInput = document.querySelector("#query");
+    const status = document.querySelector("#status");
+    const resultsList = document.querySelector("#results");
+    const downloadArea = document.querySelector("#downloadArea");
+    let activeJobId = null;
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      resultsList.replaceChildren();
+      downloadArea.replaceChildren();
+      status.textContent = "Searching…";
+
+      try {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(queryInput.value)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Search failed.");
+
+        if (!data.results.length) {
+          status.textContent = "No results found.";
+          return;
+        }
+
+        status.textContent = "Choose a result:";
+        for (const item of data.results) {
+          const li = document.createElement("li");
+          const button = document.createElement("button");
+          const minutes = item.duration
+            ? ` (${Math.floor(item.duration / 60)}:${String(item.duration % 60).padStart(2, "0")})`
+            : "";
+
+          button.textContent = `Select: ${item.title}${minutes}`;
+          button.addEventListener("click", () => prepareDownload(item.url, button));
+          li.append(button);
+          resultsList.append(li);
+        }
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    });
+
+    async function prepareDownload(url, button) {
+      button.disabled = true;
+      status.textContent = "Preparing MP3…";
+      downloadArea.replaceChildren();
+
+      try {
+        const response = await fetch("/api/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Download preparation failed.");
+
+        activeJobId = data.id;
+        status.textContent = "Your MP3 is ready.";
+
+        const link = document.createElement("a");
+        link.href = `/api/file/${encodeURIComponent(data.id)}`;
+        link.download = "audio.mp3";
+        link.textContent = "Download MP3";
+        link.addEventListener("click", () => {
+          // The server deletes the file after the transfer ends.
+          activeJobId = null;
+        });
+        downloadArea.append(link);
+      } catch (error) {
+        status.textContent = error.message;
+        button.disabled = false;
+      }
+    }
+
+    // Best effort only; browsers may not deliver this when a tab closes.
+    window.addEventListener("pagehide", () => {
+      if (activeJobId) {
+        navigator.sendBeacon(`/api/file/${encodeURIComponent(activeJobId)}`, "");
+      }
+    });
+  </script>
+</body>
+</html>
